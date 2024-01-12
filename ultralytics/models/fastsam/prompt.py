@@ -177,6 +177,103 @@ class FastSAMPrompt:
             plt.close()
             pbar.set_description(f"Saving {result_name} to {save_path}")
 
+        def plot_to_result(self,
+                       annotations,
+                       bboxes=None,
+                       points=None,
+                       point_label=None,
+                       mask_random_color=True,
+                       better_quality=True,
+                       retina=False,
+                       withContours=True) -> np.ndarray:
+        if isinstance(annotations[0], dict):
+            annotations = [annotation['segmentation'] for annotation in annotations]
+        image = self.img
+        image = cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        original_h = image.shape[0]
+        original_w = image.shape[1]
+        if sys.platform == "darwin":
+            plt.switch_backend("TkAgg")
+        plt.figure(figsize=(original_w / 100, original_h / 100))
+        # Add subplot with no margin.
+        plt.subplots_adjust(top=1, bottom=0, right=1, left=0, hspace=0, wspace=0)
+        plt.margins(0, 0)
+        plt.gca().xaxis.set_major_locator(plt.NullLocator())
+        plt.gca().yaxis.set_major_locator(plt.NullLocator())
+
+        plt.imshow(image)
+        if better_quality:
+            if isinstance(annotations[0], torch.Tensor):
+                annotations = np.array(annotations.cpu())
+            for i, mask in enumerate(annotations):
+                mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, np.ones((3, 3), np.uint8))
+                annotations[i] = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_OPEN, np.ones((8, 8), np.uint8))
+        if self.device == 'cpu':
+            annotations = np.array(annotations)
+            self.fast_show_mask(
+                annotations,
+                plt.gca(),
+                random_color=mask_random_color,
+                bboxes=bboxes,
+                points=points,
+                pointlabel=point_label,
+                retinamask=retina,
+                target_height=original_h,
+                target_width=original_w,
+            )
+        else:
+            if isinstance(annotations[0], np.ndarray):
+                annotations = torch.from_numpy(annotations)
+            self.fast_show_mask_gpu(
+                annotations,
+                plt.gca(),
+                random_color=mask_random_color,
+                bboxes=bboxes,
+                points=points,
+                pointlabel=point_label,
+                retinamask=retina,
+                target_height=original_h,
+                target_width=original_w,
+            )
+        if isinstance(annotations, torch.Tensor):
+            annotations = annotations.cpu().numpy()
+        if withContours:
+            contour_all = []
+            temp = np.zeros((original_h, original_w, 1))
+            for i, mask in enumerate(annotations):
+                if type(mask) == dict:
+                    mask = mask['segmentation']
+                annotation = mask.astype(np.uint8)
+                if not retina:
+                    annotation = cv2.resize(
+                        annotation,
+                        (original_w, original_h),
+                        interpolation=cv2.INTER_NEAREST,
+                    )
+                contours, hierarchy = cv2.findContours(annotation, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
+                for contour in contours:
+                    contour_all.append(contour)
+            cv2.drawContours(temp, contour_all, -1, (255, 255, 255), 2)
+            color = np.array([0 / 255, 0 / 255, 255 / 255, 0.8])
+            contour_mask = temp / 255 * color.reshape(1, 1, -1)
+            plt.imshow(contour_mask)
+
+        plt.axis('off')
+        fig = plt.gcf()
+        plt.draw()
+
+        try:
+            buf = fig.canvas.tostring_rgb()
+        except AttributeError:
+            fig.canvas.draw()
+            buf = fig.canvas.tostring_rgb()
+        cols, rows = fig.canvas.get_width_height()
+        img_array = np.frombuffer(buf, dtype=np.uint8).reshape(rows, cols, 3)
+        result = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        plt.close()
+        return result
+
+    
     @staticmethod
     def fast_show_mask(
         annotation,
